@@ -144,6 +144,8 @@ docker compose --profile test run --build --rm test
 
 `./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. `./scripts/test.sh` runs Rust tests, starts the stack, and runs the HTTP suite. The 15 original smoke tests remain unchanged in `tests/test_smoke.py`; additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
 
+The [submission checklist](docs/submission.md) maps requirements to tests and explains the migration's tradeoffs. `./scripts/test.sh` also runs CLI acceptance. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside the submitted repository. Normal tests never depend on `legacy/`.
+
 ## Intentional safety changes
 
 Admin endpoints require a valid admin token (missing/invalid token 401, non-admin 403); logout revokes its token. Profile updates accept only name/email, duplicate email changes return 409, and API responses exclude password hashes. Existing legacy MD5 password hashes remain readable. Role changes accept `user` or `admin`. Cancelled orders cannot be reopened through admin status changes; other legacy status strings remain accepted.
