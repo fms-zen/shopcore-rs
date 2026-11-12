@@ -1,90 +1,58 @@
-# ShopCore Rust migration contract
+# Compatibility contract
 
-This records the migration's compatibility requirements and original acceptance at revision `e81bd43`. Later changes, including the empty-coupon correction and coupon regression tests, are outside that recorded acceptance run.
+ShopCore preserves the original service's HTTP, command, and data contracts, with the safety changes below. [docs/openapi.yaml](docs/openapi.yaml) defines the HTTP operations, response keys, status codes, defaults, and pagination. [API and command coverage](docs/submission.md) maps these behaviors to tests.
 
-Project root is `shopcore-rs/`. The sibling `legacy/` is read-only reference material. The project must contain unchanged copies of the bank simulator, seed CSV, OpenAPI document, and supplied tests. Running it must not require its sibling directory.
+## Data and packaging
 
-## Migration ownership
+The schema retains the six original tables, `users`, `products`, `coupons`, `orders`, `order_items`, and `payments`, with their existing PostgreSQL column types. `SERIAL` IDs decode as `i32`, aggregate counts as `i64`, and `TIMESTAMP` values as `NaiveDateTime`. Dates remain JSON strings. Money remains JSON numeric with PostgreSQL `DOUBLE PRECISION` storage, and order totals round to two decimals with Python-compatible rounding behavior. SQLx queries resolve at runtime without a database connection during compilation.
 
-- Foundation/integration owns Cargo files, shared modules, module registries, startup, Docker/Compose and copied reference assets.
-- Accounts/catalog/admin owns its route implementations.
-- Orders owns order routes and order/pricing/inventory helpers.
-- Money owns wallet/payment/webhook routes and bank client.
-- Reports/maintenance owns reports, exporter, CLI commands and runbook.
-- Astra reviewer owns this contract and review notes. Shared-interface changes require a message to foundation and reviewer before adoption. Executors do not edit another executor's files.
+The bank simulator, seed CSV, OpenAPI document, and supplied smoke tests remain unchanged. Startup seeds the original admin credentials, sample products, `SAVE10`, and `ONCE50`. The repository builds and runs without a sibling `legacy/` directory. Operational command logic is Rust, and `manage.py` forwards arguments to the Rust executable.
 
-## Freeze the shared interface before feature integration
+## HTTP and command behavior
 
-Foundation confirmed these shared definitions. Foundation publishes the final compiling definitions and any clarifications to all executors.
+The API contains 27 HTTP operations across health, accounts, products, orders, wallet payments, bank settlement, administration, and reports. Product reads are public. Order listing and payment are owner-scoped. Responses preserve the documented keys, status codes, defaults, and pagination. OpenAPI permits extra response fields, but responses exclude password hashes. Errors are JSON objects with an `error` string, including malformed request bodies and unknown resources.
 
-```rust
-#[derive(Clone)]
-pub struct AppState {
-    pub pool: sqlx::PgPool,
-    pub sessions: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, i32>>>,
-    pub http: reqwest::Client,
-    pub config: std::sync::Arc<Config>,
-    pub jobs: tokio::sync::mpsc::UnboundedSender<Job>,
-    pub outbox: std::sync::Arc<tokio::sync::RwLock<Vec<serde_json::Value>>>,
-}
-pub type ApiResult<T> = Result<T, ApiError>;
-// ApiError carries an HTTP status and public message; IntoResponse emits {"error": message}.
-pub fn json_response(status: axum::http::StatusCode, value: serde_json::Value)
-    -> axum::response::Response;
-pub async fn require_user(state: &AppState, headers: &axum::http::HeaderMap)
-    -> ApiResult<AuthUser>;
-pub async fn require_admin(state: &AppState, headers: &axum::http::HeaderMap)
-    -> ApiResult<AuthUser>;
-// Every HTTP feature module exposes:
-pub fn routes() -> axum::Router<AppState>;
-```
+Order creation preserves coupon expiry and use rules, stock reservation, and wallet credit behavior. An omitted item quantity defaults to one. Notifications send pending and paid payloads to an order's `notify_url`. Background email jobs append to the in-memory outbox.
 
-Frozen AuthUser fields: `id: i32`, `username: String`, `email: Option<String>`, `name: Option<String>`, `role: String`, `wallet_balance: f64`, with `is_admin(&self)->bool`. Config has public String fields `database_url`, `bank_url`, `bank_secret`, `secret_key`, `admin_user`, `admin_password`, `bind_addr`, and `export_dir: PathBuf`. Job has public `kind: String`, `payload: Value`; `jobs::enqueue(&AppState, &str, Value)->()` is synchronous. `ApiError::new(StatusCode, impl Into<String>)` plus `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict` constructors and SQLx/I/O conversions are provided. Database entry points are `db::init(&PgPool)->ApiResult<()>` and `db::seed(&PgPool,&Config)->ApiResult<()>`.
+Reports read current committed data and bucket all order statuses in the half-open interval `[from,to)`. Date bounds accept dates or timestamps without time zones and default to `1970-01-01` and `2999-12-31`. Top products group by product name, include only paid and shipped orders, and use original line prices without allocating coupon discounts.
 
-No executor invents a second AppState, authentication system or error type. Use runtime SQLx queries (no database-dependent query macros). Route response signatures may use `ApiResult<Response>` and the common JSON helper.
+The export formats retain separate contracts:
 
-Use existing Postgres column types and all six tables: users, products, coupons, orders, order_items, payments. Database SERIAL ids decode as i32; aggregate counts decode as i64. PostgreSQL TIMESTAMP requires NaiveDateTime, not timezone-bearing DateTime. Date fields remain JSON strings. Money remains JSON numeric and existing DOUBLE PRECISION schema is retained; order totals round to two decimals with attention to Python rounding behavior.
+- HTTP export is gzip CSV with header `order_no,date,status,user,product,qty,price` and one row per order item. It returns `<filename>.gz`, and downloads use `application/gzip`.
+- CLI export is plain CSV with header `order_no,status,total,created_at` and one row per order, including all statuses, ordered by database ID.
 
-## Required compatibility checklist
+The CLI supports `init-db`, `seed`, `import-products PATH`, `export-sales PATH`, and `purge-sessions`. Commands retain the messages `tables ready`, `seeded`, `imported N products`, `wrote PATH (N rows)`, and `purged sessions`. CSV import accepts the `sku,name,price,stock` header and quoted fields. It keeps the first occurrence of each SKU within the input and permits SKUs already in the database. Import validates every record before committing all rows together.
 
-- [x] Health: GET /health.
-- [x] Accounts: POST /api/register, /api/login, /api/logout; GET and PATCH /api/users/me.
-- [x] Products: GET and POST /api/products; GET and PUT /api/products/{id}.
-- [x] Orders: GET and POST /api/orders; GET /api/orders/{id}; GET invoice; POST cancel and refund.
-- [x] Money: GET /api/wallet; POST topup and transfer; POST /api/orders/{id}/pay; POST /api/webhooks/bank.
-- [x] Administration: GET /api/admin/users; POST user role and order status routes.
-- [x] Reports: GET /api/reports/sales; POST /api/reports/export; GET /api/reports/download.
-- [x] CLI: init-db, seed, import-products PATH, export-sales PATH, purge-sessions.
-- [x] All 15 supplied smoke tests pass unchanged against Rust.
-- [x] Seed admin credentials, sample products and SAVE10/ONCE50 coupons match legacy assets.
-- [x] Notifications send pending/paid payloads to notify_url; background email jobs remain supported.
-- [x] Root Compose builds/runs independently of legacy and documented commands succeed.
-- [x] Supplied tests run with one documented command; all operational command logic is Rust, with only a forwarding compatibility shim if needed.
+## Authentication and input validation
 
-The API contains 27 HTTP operations. Preserve required response keys, documented status codes, default values, pagination, public product access, owner-scoped order listing and payment, coupon expiry/use behavior, stock reservation, wallet credits and report semantics. Extra fields are permitted by OpenAPI but password hashes need not be exposed. Error responses are JSON objects with an error string, including extractor/fallback failures where practical.
+Admin routes return 401 for a missing or invalid bearer token and 403 for an authenticated non-admin. Logout invalidates its token. Profile updates accept only name and email, and duplicate email changes return 409. Tokens do not reproduce the legacy predictable MD5 values. Existing password hashes remain readable. Role changes accept `user` or `admin`.
 
-Reports bucket all orders in [from,to); top products include only paid/shipped orders. HTTP CSV export has header `order_no,date,status,user,product,qty,price`, one row per item, is gzip encoded, and returns `<filename>.gz`. CLI export is plain CSV with header `order_no,status,total,created_at` and one row per order. Preserve both formats.
+SQL values are bound. Sort and `group_by` columns use allowlists, so untrusted input never becomes a SQL identifier. Invalid sort or group values, product pagination below one, malformed or nonfinite monetary values, negative money or CSV stock, and malformed or nonpositive item quantities return JSON errors. Topup, transfer, and refund amounts are strictly positive.
 
-A correctly HMAC-SHA256 signed settled webhook with an arbitrary `bank_ref` moves an existing pending order to paid even when no matching payment row exists. It independently marks any matching payment settled. The supplied test exercises this requirement. Do not require a payment match, insert a synthetic payment, or change `paid_amount` for the callback.
+CSV and gzip libraries handle exports. HTTP report filenames stay within the export directory, and atomic rename publishes complete gzip files. Exports do not use shell commands.
 
-## Intentional safety fixes and transaction rules
+## Transactions and money
 
-- Missing/invalid bearer token is 401; authenticated non-admin is 403 on admin routes. This follows OpenAPI and fixes the legacy anonymous-admin bypass.
-- Logout invalidates its token. Only name/email may be changed through profile update. Tokens need not reproduce legacy predictable MD5 values; existing password hashes must remain readable.
-- Bind SQL values. Whitelist documented sort/group_by values; never interpolate untrusted SQL identifiers. Use CSV and gzip libraries and constrain report filenames to the export directory.
-- Reject malformed/non-finite/negative monetary inputs and invalid item quantities rather than creating credits or stock through arithmetic abuse. Preserve documented valid requests and explicitly record any additional behavior change.
-- Approved money correction. Topup, transfer, and refund amounts must be strictly positive. Cumulative refunds cannot exceed the order total. Sequential partial refunds remain supported within that cap. Cancelled orders cannot subsequently be refunded. Cancellation and refund must not create duplicate wallet credit.
-- Approved admin correction. Cancelled is terminal for admin status changes, preventing repeated stock restoration or wallet credit. When cancelling a paid/shipped order, wallet credit is the remaining total minus prior refunds. Keep the existing refunded response-field semantics. Do not redesign all admin transitions.
-- Use one transaction for each stock/coupon/money mutation. Order state is locked before pay/cancel/refund; user locks for transfers are acquired in ascending ID order; product locks are acquired consistently. Atomic increments/decrements avoid stale balances. Failed order creation rolls back all inserted rows, stock changes and coupon use.
-- Single-use coupon consumption and order number allocation must be safe under concurrent requests without schema redesign.
-- Bank requests have finite timeouts. All retries for an order reuse a stable idempotency key; do not hold wallet-user locks during bank I/O. A bounded order lock during bank calls is acceptable for this timebox if callback handling cannot deadlock the HTTP response.
-- Verify HMAC over the exact raw webhook bytes; reject absent/invalid signatures. The settlement compatibility rule above still applies.
-- Enqueue external notifications only after successful transaction commit. Do not require notification success to commit a purchase.
+Each stock, coupon, or money mutation uses one transaction. Payment, cancellation, refund, and settlement lock the order before changing state. Transfers lock users in ascending ID order, and product locks follow product ID order. Atomic increments and decrements prevent stale balances. Failed order creation rolls back inserted rows, stock changes, and coupon use together. Single-use coupon consumption and order number allocation remain safe under concurrent requests without a schema change.
 
-## Acceptance gates
+Cumulative refunds cannot exceed the order total. Sequential partial refunds remain supported within that cap. Cancelled orders cannot be refunded. Cancellation and refund cannot create duplicate wallet credit. Cancelled is terminal for admin status changes, preventing repeated stock restoration or credit. Other legacy status strings remain accepted. Cancelling a paid or shipped order credits the total minus prior refunds. The existing `refunded` response-field semantics remain unchanged.
 
-Foundation runs shared builds serially with a reusable Cargo cache. Initial acceptance covers image pulls, compilation, PostgreSQL connection, and health. Integration acceptance checks that every operation is registered and every command is dispatched. Final acceptance covers compilation, tests, the unchanged smoke suite, targeted concurrency, rollback, idempotency, gzip content, CLI commands, and a clean standalone startup. Each executor reports commands, results, and remaining blockers. The reviewer checks the diff and evidence before declaring completion.
+Bank requests have finite timeouts, and all retries for an order reuse a stable idempotency key. Bank I/O does not hold a wallet-user lock. The payment transaction holds the order lock during bounded bank calls, and callback processing waits for that lock without blocking the bank response.
 
-Review division: Astra reviewer owns code, transaction and security/compatibility review. Coordinator owns independent black-box/system acceptance and packaging checks. Do not duplicate Cargo builds or test runs already owned by foundation/coordinator.
+Webhooks verify HMAC-SHA256 over the exact raw request bytes and reject missing or invalid signatures. A correctly signed settled event with an arbitrary `bank_ref` moves an existing pending order to paid even without a matching payment row. It independently marks any matching payment settled. The callback does not require a payment match, insert a synthetic payment, or change `paid_amount`.
 
-The coordinator accepted Git archive `e81bd43` after building it with a new Docker-container BuildKit builder and starting fresh database and export volumes. All 47 HTTP tests passed on an Internet-isolated Compose network, on linux/arm64 through OrbStack. Source review approved that revision. See [REVIEW.md](REVIEW.md) for the recorded evidence and preserved limitations.
+External notifications enter the queue only after a successful transaction commit. Notification delivery success is not required to commit a purchase.
+
+## Known limits
+
+- Any authenticated user can access another user's order detail, invoice, cancellation, and refund. Order listing and payment remain owner-scoped.
+- A slow bank can accept a charge after the API times out. If the order remains pending and the client switches to wallet payment before settlement, both methods can collect money. Stable bank retry keys do not prevent this cross-method case.
+- A partial refund changes status to `refunded`. Cancellation while that status remains restores stock without crediting the remaining total. If an admin first changes status to `paid` or `shipped`, cancellation credits only the remainder.
+- Existing password hashes use MD5, and money uses `f64` with PostgreSQL `DOUBLE PRECISION` to preserve the schema and existing credentials.
+- Sessions, background jobs, and the email outbox belong to one server process and disappear on restart. A standalone `purge-sessions` command does not revoke the running server's sessions. Email jobs do not send through a provider.
+
+## Verification
+
+`./scripts/test.sh` runs Rust tests, builds and starts the stack, runs the HTTP suite, and checks the CLI commands. The supplied smoke tests remain unchanged. Additional tests cover authorization, validation, concurrency, rollback, idempotency, reports, and export formats.
+
+`python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` compares isolated, equivalently seeded legacy and Rust stacks. It mutates both stacks and requires a legacy executable outside this repository. The comparison covers its executed scenarios and reports documented safety differences separately. It does not establish equivalence for every input or concurrent execution.

@@ -5,3 +5,8 @@ __pycache__
 .env
 exports
 test-results
+.agents
+AGENTS.md
+REVIEW.md
+.audit
+legacy

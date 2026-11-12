@@ -137,14 +137,12 @@ CLI export writes plain CSV with `order_no,status,total,created_at`, one row per
 ## Verification
 
 ```sh
-./scripts/cargo.sh check --locked --all-targets
-./scripts/cargo.sh test --locked
-docker compose --profile test run --build --rm test
+./scripts/test.sh
 ```
 
-`./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. `./scripts/test.sh` runs Rust tests, starts the stack, runs the HTTP suite, and runs CLI acceptance. The 15 original smoke tests remain unchanged in `tests/test_smoke.py`. Additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
+`./scripts/test.sh` runs Rust tests, starts the stack, runs the HTTP suite, and checks the CLI commands. `./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. The original smoke tests remain unchanged in `tests/test_smoke.py`. Additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
 
-The [submission checklist](docs/submission.md) maps requirements to tests and explains the migration's tradeoffs. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside the submitted repository. Normal tests never depend on `legacy/`.
+The [API and command coverage](docs/submission.md) reference maps behavior to tests and describes known limits. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside this repository. Normal tests never depend on `legacy/`. Its result covers only the scenarios the comparison executes, not every input or concurrent execution.
 
 ## Intentional safety changes
 

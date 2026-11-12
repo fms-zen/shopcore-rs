@@ -1,10 +1,10 @@
-# Submission evidence
+# API and command coverage
 
-This checklist maps the migration requirements to source and repeatable checks. It records coverage, not a new test-run result. The HTTP contract is [openapi.yaml](openapi.yaml), and approved safety changes are in [CONTRACT.md](../CONTRACT.md).
+This reference maps API and command behavior to source and repeatable checks. It describes test coverage without asserting a particular test-run result. The HTTP contract is [openapi.yaml](openapi.yaml), and compatibility requirements and safety changes are in [CONTRACT.md](../CONTRACT.md).
 
 ## HTTP operations
 
-Each operation below has coverage in the supplied, unchanged [test_smoke.py](../tests/test_smoke.py). These smoke tests establish the original acceptance baseline. The migration's own regression tests are listed separately below.
+Each operation below has coverage in the supplied, unchanged [test_smoke.py](../tests/test_smoke.py). Additional regression tests are listed below.
 
 | Method and path | Supplied test function |
 | --- | --- |
@@ -36,7 +36,7 @@ Each operation below has coverage in the supplied, unchanged [test_smoke.py](../
 | `POST /api/admin/orders/{id}/status` | `test_admin_users_roles_and_order_status` |
 | `POST /api/webhooks/bank` | `test_bank_webhook_with_valid_signature` |
 
-The migration adds these checks beyond the supplied smoke tests. The coupon representation and expiry tests were added after the original acceptance recorded in [REVIEW.md](../REVIEW.md).
+The following tests cover behavior beyond the supplied smoke tests.
 
 | Behavior | Migration test file and function |
 | --- | --- |
@@ -65,7 +65,7 @@ The migration adds these checks beyond the supplied smoke tests. The coupon repr
 
 All command logic is in [src/cli.rs](../src/cli.rs), with initialization and seed logic in [src/db.rs](../src/db.rs). [manage.py](../manage.py) only forwards arguments to Rust. [scripts/test-cli.sh](../scripts/test-cli.sh) exercises the shim against the existing seeded Compose stack.
 
-| Command | CLI acceptance check |
+| Command | CLI check |
 | --- | --- |
 | `init-db` | Repeated success message, six expected tables, existing data unchanged |
 | `seed` | Repeated success message, existing data unchanged, original product values, coupons, and admin credentials |
@@ -80,16 +80,16 @@ Rust unit tests in `src/cli.rs` also cover `csv_import_handles_quotes_and_keeps_
 | Requirement | Evidence and repeatable check |
 | --- | --- |
 | Standalone repository | [Dockerfile](../Dockerfile) copies only repository files. [compose.yaml](../compose.yaml) defines app, PostgreSQL 16, bank simulator, and tests without a sibling checkout. |
-| Original schema | [schema.sql](../schema.sql) defines `users`, `products`, `coupons`, `orders`, `order_items`, and `payments`. `src/db.rs` embeds that file. CLI acceptance checks the tables. |
+| Original schema | [schema.sql](../schema.sql) defines `users`, `products`, `coupons`, `orders`, `order_items`, and `payments`. `src/db.rs` embeds that file. CLI checks verify the tables. |
 | Original local assets | [bank_sim/app.py](../bank_sim/app.py), [seed/products.csv](../seed/products.csv), [openapi.yaml](openapi.yaml), and [test_smoke.py](../tests/test_smoke.py) are the copied reference assets. Byte comparison with the supplied originals is an external packaging check. |
-| Original seed behavior | `src/db.rs` seeds the admin, product CSV, `SAVE10`, and `ONCE50`. CLI acceptance checks values and repeatability. |
-| One test command | `./scripts/test.sh` runs Rust tests, builds and starts the stack, runs the HTTP suite, then runs CLI acceptance. The script needs Docker Compose. |
+| Original seed behavior | `src/db.rs` seeds the admin, product CSV, `SAVE10`, and `ONCE50`. CLI checks verify values and repeatability. |
+| One test command | `./scripts/test.sh` runs Rust tests, builds and starts the stack, runs the HTTP suite, then checks CLI commands. The script needs Docker Compose. |
 | Existing stack CLI check | `./scripts/test-cli.sh` requires running seeded `app` and `db` services. Run it without concurrent writers because it checks database snapshots and export row counts. |
 | Offline runtime | Built images contain the executables and dependencies. No external Internet service is required for normal operation. PostgreSQL and the internal bank service still require network connectivity. An optional `notify_url` must be reachable when used. |
 | Build dependencies | The first image build and Cargo dependency download require network access. Cached Cargo dependencies allow `cargo build --locked --offline`. Offline runtime does not imply an uncached offline build. |
-| Comparative compatibility | [scripts/compare-api.py](../scripts/compare-api.py) compares HTTP observations from isolated, equivalently seeded legacy and Rust stacks. It mutates both. The legacy executable must be supplied outside the submitted repository. Normal tests never depend on `legacy/`. |
+| Comparative compatibility | [scripts/compare-api.py](../scripts/compare-api.py) compares HTTP observations from isolated, equivalently seeded legacy and Rust stacks. It mutates both. The legacy executable must be supplied outside this repository. Normal tests never depend on `legacy/`. |
 
-The comparison script supplements the supplied acceptance tests. Its result applies to the scenarios it executes, with documented safety differences reported separately. It does not establish equivalence for every input or concurrent execution.
+The comparison script supplements the supplied smoke tests. Its result applies to the scenarios it executes, with documented safety differences reported separately. It does not establish equivalence for every input or concurrent execution.
 
 ## Design decisions and limits
 
@@ -101,11 +101,7 @@ Bank requests use an order-derived idempotency key so retries can recover the sa
 
 The two export formats serve separate existing contracts. CLI export is plain CSV with `order_no,status,total,created_at`, one row per order. HTTP export is gzip CSV with `order_no,date,status,user,product,qty,price`, one row per item. CSV libraries preserve quoted fields. The HTTP exporter confines filenames and publishes complete gzip files through atomic rename. See [src/cli.rs](../src/cli.rs) and [src/services/exporter.rs](../src/services/exporter.rs).
 
-The approved safety changes are documented in [README.md](../README.md#intentional-safety-changes) and [CONTRACT.md](../CONTRACT.md#intentional-safety-fixes-and-transaction-rules). They include admin authentication, constrained profile updates, input validation, refund limits, terminal cancellation, and transaction protection.
-
-They do not authorize a broader policy redesign.
-
-The migration preserves these behaviors. Changing them requires a user decision.
+The safety changes documented in [README.md](../README.md#intentional-safety-changes) and [CONTRACT.md](../CONTRACT.md) include admin authentication, constrained profile updates, input validation, refund limits, terminal cancellation, and transaction protection. The following behaviors remain:
 
 - Any authenticated user can access order detail, invoice, cancellation, and refund for another user's order. Order listing and payment remain owner-scoped.
 - A slow bank can accept a charge after the API times out. If the order remains pending and the client switches to wallet payment before settlement, both payment methods can collect money. Stable bank retry keys do not prevent this cross-method case.
@@ -113,4 +109,4 @@ The migration preserves these behaviors. Changing them requires a user decision.
 - Existing password hashes use MD5, and money remains `f64` with PostgreSQL `DOUBLE PRECISION`. This preserves the schema and existing credentials.
 - Sessions, background jobs, and the email outbox are process-local and disappear on restart. Standalone `purge-sessions` does not revoke sessions in the running server. Email jobs append to memory rather than sending through a provider.
 
-The submission does not provide a complete authorization redesign, durable job delivery, exact decimal money, or reconciliation of uncertain bank outcomes.
+The service does not provide complete order authorization, durable job delivery, exact decimal money, or reconciliation of uncertain bank outcomes.
