@@ -20,6 +20,87 @@ DATABASE_URL=postgresql://shop:shop@localhost:5432/shop cargo run --locked -- se
 
 The runtime needs no network access for dependency installation or compilation. Normal bank payments contact `BANK_URL`; notification jobs contact the order's `notify_url`. Building images or fetching Cargo dependencies requires network access on the first build. After caching dependencies, `cargo build --locked --offline` works without contacting the registry.
 
+## Architecture and flows
+
+### Running services
+
+```mermaid
+flowchart LR
+    Client["HTTP client"] --> API
+    subgraph Server["Rust server process"]
+        API["Axum API :8000"] --> Sessions["Sessions: memory"]
+        API --> Jobs["Job queue and worker: memory"]
+        Jobs --> Outbox["Email outbox: memory"]
+    end
+    API <--> DB[("PostgreSQL: six existing tables")]
+    API -->|charge| Bank["Bank simulator :5001"]
+    Bank -->|signed settlement webhook| API
+    Jobs -. optional POST .-> Notify["Order notify_url"]
+    API -->|write gzip CSV| Exports["Export volume: /tmp/exports"]
+    Exports -->|download bytes| API
+    Manage["manage.py"] --> CLI["Rust CLI process"]
+    CLI <--> DB
+    CLI --> PlainCSV["Plain order CSV at supplied path"]
+```
+
+Sessions, queued jobs, and the email outbox belong to one server process and disappear on restart. Email jobs append to the outbox; they do not contact an email provider. Compose persists PostgreSQL data and gzip exports in volumes. Maintenance commands run in a separate Rust process.
+
+### Order creation
+
+```mermaid
+flowchart TD
+    Request["POST /api/orders"] --> Input{"Items and quantities valid?"}
+    Input -->|no| Error["Return JSON error"]
+    Input -->|yes| Begin["Begin PostgreSQL transaction"]
+    Begin --> Locks["Lock coupon if supplied; lock products by id"]
+    Locks --> Validate{"Coupon, prices, stock and total valid?"}
+    Validate -->|no| Rollback["Rollback all transaction changes"]
+    Validate -->|yes| Number["Acquire advisory lock; allocate order number"]
+    Number --> Write["Insert pending order and lines; reserve stock; consume coupon"]
+    Locks -. database error .-> Rollback
+    Number -. database error .-> Rollback
+    Write -. database error .-> Rollback
+    Rollback --> Error
+    Write --> Commit["Commit"]
+    Commit --> Enqueue["Enqueue email and optional pending notification"]
+    Enqueue --> Response["Return created order"]
+```
+
+Any validation or database failure inside the transaction takes the rollback path. Jobs are enqueued only after commit; notification delivery failure does not undo the order.
+
+### Bank payment and settlement
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as Rust API
+    participant DB as PostgreSQL
+    participant Bank as Bank simulator
+    Client->>API: POST /api/orders/{id}/pay (bank)
+    API->>DB: Begin; lock owned pending order
+    Note over API,DB: Order lock remains held during bank calls
+    API->>Bank: POST /charge (order_id, amount, stable Idempotency-Key)
+    Note over API,Bank: Up to 3 attempts, each with a 2 second timeout
+    Bank-->>API: Accepted response with bank_ref
+    API->>DB: Insert captured payment; set order paid and paid_amount
+    API->>DB: Commit
+    Note over API: Enqueue email and optional paid notification
+    API-->>Client: 200 paid, bank_ref
+    Bank->>API: Later POST /api/webhooks/bank (settled, X-Signature)
+    API->>API: Verify HMAC-SHA256 over exact raw bytes
+    alt Invalid signature
+        API-->>Bank: 401
+    else Valid signed settled event
+        API->>DB: Begin; lock order
+        API->>DB: Mark matching payment settled
+        API->>DB: Set pending order paid; preserve paid_amount
+        API->>DB: Commit
+        API-->>Bank: 200 ok
+    end
+```
+
+Payment marks the order paid without waiting for settlement; a callback arriving during payment waits for the order lock. If no bank attempt produces an accepted response, the API rolls back its database transaction and returns 502; the stable retry key does not promise exactly-once bank execution. For compatibility, a valid signed settlement with an unmatched `bank_ref` still marks an existing pending order paid, without inserting a payment or changing `paid_amount`.
+
 ## Configuration
 
 Environment variables and defaults:
