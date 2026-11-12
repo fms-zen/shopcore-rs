@@ -1,28 +1,96 @@
 # ShopCore Rust
 
-ShopCore's storefront backend uses Rust, Axum, and PostgreSQL. It keeps the original six-table schema, `DOUBLE PRECISION` amounts, and timestamp columns. The bank simulator, seed data, OpenAPI contract, and original smoke tests are included. Running the project does not require `../legacy`.
+ShopCore is a Rust replacement for a Python storefront backend, built with Axum, Tokio, SQLx, and PostgreSQL 16. It provides accounts, a product catalog, orders, coupons, wallet transfers, bank payments, administration, and sales reports.
 
-## Run and build
+The migration preserves the original HTTP and command contracts, six-table schema, seed data, bank simulator, and supplied smoke tests, with [documented safety changes](#intentional-safety-changes). The repository builds and runs without a separate legacy checkout.
+
+## Start the service
+
+Install Docker with Docker Compose, then run:
 
 ```sh
-docker compose up --build --wait
+docker compose up -d --build --wait app
 curl http://localhost:8000/health
 ```
 
-The API listens on port 8000 and the included bank simulator on 5001. Startup creates missing tables and seeds admin `admin` / `admin123`, the ten original products, and `SAVE10` / `ONCE50`. Database and report files persist in Compose volumes.
+The health response is `{"status":"ok"}`. The API listens on port 8000, and the included bank simulator listens on port 5001. Compose starts PostgreSQL and the simulator with the app, and persists database data and HTTP exports in named volumes.
 
-For a local Rust 1.88+ toolchain and an available PostgreSQL server:
+Startup creates missing tables and seeds ten products, coupons `SAVE10` and `ONCE50`, and an admin account. The development defaults are username `admin` and password `admin123`. Set custom credentials in the app environment before the initial seed. See [configuration](#configuration).
+
+For a local Rust 1.88+ toolchain, use a separately reachable PostgreSQL server and bank simulator:
 
 ```sh
 cargo build --locked --release
 DATABASE_URL=postgresql://shop:shop@localhost:5432/shop cargo run --locked -- serve
 ```
 
-Built images contain the executables and dependencies needed at runtime. Bank payments contact `BANK_URL`, and notification jobs contact the order's `notify_url`. The first image build or Cargo dependency download requires network access. After caching dependencies, `cargo build --locked --offline` works without contacting the registry.
+The initial image build and Cargo dependency download require network access. Built images contain their runtime dependencies. Cached Cargo dependencies support `cargo build --locked --offline`. Bank payments require access to `BANK_URL`, and optional order notifications require access to their `notify_url`.
 
-## Architecture and flows
+## Run the tests
 
-### Running services
+```sh
+./scripts/test.sh
+```
+
+This command requires Docker Compose. It runs Rust tests, builds and starts the stack, runs the HTTP acceptance suite, and checks all five maintenance commands. The supplied [smoke tests](tests/test_smoke.py) remain unchanged. Additional tests cover validation, authorization, concurrent transactions, rollback, reports, and CSV exports.
+
+[scripts/cargo.sh](scripts/cargo.sh) provides the containerized Rust toolchain. [API and command coverage](docs/submission.md) maps behavior to tests and explains the optional comparison against a separately supplied Python service. Normal tests do not require that service. Run checks without concurrent writers because CLI checks compare database snapshots and export row counts.
+
+## API and contracts
+
+- [OpenAPI specification](docs/openapi.yaml) defines operations, request and response fields, status codes, defaults, and pagination.
+- [Compatibility contract](CONTRACT.md) describes schema preservation, authentication, order and payment behavior, report formats, and transaction guarantees.
+- [API and command coverage](docs/submission.md) links operations and compatibility requirements to source and repeatable checks.
+
+Product reads are public. Protected routes use `Authorization: Bearer <token>` from `POST /api/login`. Admin routes require an admin account. Errors return JSON with an `error` string. See [known limits](#known-limits) for the remaining order authorization gaps.
+
+## Configuration
+
+The app reads these environment variables. Defaults apply when a variable is unset.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgresql://shop:shop@localhost:5432/shop` | PostgreSQL connection |
+| `BANK_URL` | `http://localhost:5001` | Bank charge endpoint base URL |
+| `BANK_SECRET` | `bank-shared-secret-2019` | Shared HMAC secret for bank callbacks |
+| `SECRET_KEY` | `shopcore-dev-secret` | Compatibility setting, currently unused |
+| `ADMIN_USER` | `admin` | Admin username for seed creation |
+| `ADMIN_PASSWORD` | `admin123` | Admin password for seed creation |
+| `EXPORT_DIR` | `/tmp/exports` | HTTP gzip export directory |
+| `BIND_ADDR` | `0.0.0.0:8000` | API listen address |
+| `RUST_LOG` | `shopcore=info` | Tracing filter |
+
+[compose.yaml](compose.yaml) sets `DATABASE_URL` to `postgresql://shop:shop@db:5432/shop` and `BANK_URL` to `http://bank:5001`. Configure container variables in the service's `environment` block or a Compose override. Exporting a host variable alone does not override a literal Compose value. Changing `ADMIN_PASSWORD` does not update an existing seeded account.
+
+The bank simulator also reads these variables, plus `BANK_SECRET`. Keep the secret equal in the app and simulator.
+
+| Variable | Default | Compose value |
+| --- | --- | --- |
+| `APP_URL` | `http://localhost:8000` | `http://app:8000` |
+| `BANK_LATENCY_MS` | `0` | `0` |
+| `BANK_DROP_RATE` | `0` | `0` |
+
+`APP_URL` selects the settlement callback destination. The simulator uses the latency and drop rate settings to delay charges and simulate failed responses.
+
+## Maintenance commands
+
+Run commands in the app container. Import and export paths refer to files inside that container.
+
+```sh
+docker compose exec app shopcore init-db
+docker compose exec app shopcore seed
+docker compose exec app shopcore import-products /srv/shopcore/seed/products.csv
+docker compose exec app shopcore export-sales /tmp/orders.csv
+docker compose exec app shopcore purge-sessions
+```
+
+[manage.py](manage.py) forwards `python manage.py <command> [args]` to Rust. It uses `SHOPCORE_BIN` when set, then searches for an installed or local binary, and finally falls back to Cargo. Local commands can also use `cargo run --locked -- <command> [args]` or `target/release/shopcore <command> [args]`.
+
+CSV import accepts `sku,name,price,stock`, supports quoted fields, validates all records before writing, and commits them together. It keeps the first occurrence of each SKU within the input and permits SKUs already in the database. CLI export writes plain CSV with one row per order. HTTP export writes gzip CSV with one row per order item. See the [format contracts](CONTRACT.md#http-and-command-behavior).
+
+`purge-sessions` clears only the command process's memory. It does not revoke sessions in a running server.
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -43,111 +111,22 @@ flowchart LR
     CLI --> PlainCSV["Plain order CSV at supplied path"]
 ```
 
-Sessions, queued jobs, and the email outbox belong to one server process and disappear on restart. Email jobs append to the outbox; they do not contact an email provider. Compose persists PostgreSQL data and gzip exports in volumes. Maintenance commands run in a separate Rust process.
+Routes in `src/routes/` handle HTTP requests. Services in `src/services/` implement order creation, inventory, pricing, bank calls, exports, and notifications. `src/cli.rs` implements maintenance commands. PostgreSQL transactions and locks protect stock, coupons, order state, and wallet balances. Notifications enter the queue only after commit.
 
-### Order creation
-
-```mermaid
-flowchart TD
-    Request["POST /api/orders"] --> Input{"Items and quantities valid?"}
-    Input -->|no| Error["Return JSON error"]
-    Input -->|yes| Begin["Begin PostgreSQL transaction"]
-    Begin --> Locks["Lock coupon if supplied; lock products by id"]
-    Locks --> Validate{"Coupon, prices, stock and total valid?"}
-    Validate -->|no| Rollback["Rollback all transaction changes"]
-    Validate -->|yes| Number["Acquire advisory lock; allocate order number"]
-    Number --> Write["Insert pending order and lines; reserve stock; consume coupon"]
-    Locks -. database error .-> Rollback
-    Number -. database error .-> Rollback
-    Write -. database error .-> Rollback
-    Rollback --> Error
-    Write --> Commit["Commit"]
-    Commit --> Enqueue["Enqueue email and optional pending notification"]
-    Enqueue --> Response["Return created order"]
-```
-
-Any validation or database failure inside the transaction takes the rollback path. Jobs are enqueued only after commit; notification delivery failure does not undo the order.
-
-### Bank payment and settlement
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as Rust API
-    participant DB as PostgreSQL
-    participant Bank as Bank simulator
-    Client->>API: POST /api/orders/{id}/pay (bank)
-    API->>DB: Begin; lock owned pending order
-    Note over API,DB: Order lock remains held during bank calls
-    API->>Bank: POST /charge (order_id, amount, stable Idempotency-Key)
-    Note over API,Bank: Up to 3 attempts, each with a 2 second timeout
-    Bank-->>API: Accepted response with bank_ref
-    API->>DB: Insert captured payment; set order paid and paid_amount
-    API->>DB: Commit
-    Note over API: Enqueue email and optional paid notification
-    API-->>Client: 200 paid, bank_ref
-    Bank->>API: Later POST /api/webhooks/bank (settled, X-Signature)
-    API->>API: Verify HMAC-SHA256 over exact raw bytes
-    alt Invalid signature
-        API-->>Bank: 401
-    else Valid signed settled event
-        API->>DB: Begin; lock order
-        API->>DB: Mark matching payment settled
-        API->>DB: Set pending order paid; preserve paid_amount
-        API->>DB: Commit
-        API-->>Bank: 200 ok
-    end
-```
-
-Payment marks the order paid without waiting for settlement. A callback arriving during payment waits for the order lock. If no bank attempt produces an accepted response, the API rolls back its database transaction and returns 502. The stable retry key does not guarantee exactly-once bank execution. For compatibility, a valid signed settlement with an unmatched `bank_ref` still marks an existing pending order paid, without inserting a payment or changing `paid_amount`.
-
-## Configuration
-
-Environment variables and defaults:
-
-| Variable | Default |
-| --- | --- |
-| `DATABASE_URL` | `postgresql://shop:shop@localhost:5432/shop` |
-| `BANK_URL` | `http://localhost:5001` |
-| `BANK_SECRET` | `bank-shared-secret-2019` |
-| `SECRET_KEY` | `shopcore-dev-secret` |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `admin123` |
-| `EXPORT_DIR` | `/tmp/exports` |
-| `BIND_ADDR` | `0.0.0.0:8000` |
-| `RUST_LOG` | `shopcore=info` |
-
-Compose sets database/bank URLs to their service names. Change admin credentials before the initial seed when using custom credentials.
-
-## Maintenance compatibility
-
-```sh
-docker compose exec app shopcore init-db
-docker compose exec app shopcore seed
-docker compose exec app shopcore import-products /path/in/container/products.csv
-docker compose exec app shopcore export-sales /tmp/orders.csv
-docker compose exec app shopcore purge-sessions
-```
-
-`python manage.py <command> [args]` remains a compatibility launcher for these Rust commands. Local equivalents are `cargo run --locked -- <command> [args]` or `target/release/shopcore <command> [args]`.
-
-Commands retain legacy success messages (`tables ready`, `seeded`, `imported N products`, `wrote PATH (N rows)`, `purged sessions`). CSV import accepts the `sku,name,price,stock` header and quoted fields, keeps the first occurrence of each SKU within the input, and still permits SKUs already in the database. Import validates all records and commits them together. Sessions remain in server process memory and disappear on restart. As with legacy `manage.py`, running `purge-sessions` in another process clears that command's own memory; it does not revoke a running server's sessions.
-
-CLI export writes plain CSV with `order_no,status,total,created_at`, one row per order, all statuses, ordered by database id. The HTTP admin export writes gzip CSV with `order_no,date,status,user,product,qty,price`, one row per order item, and returns `<filename>.gz`. CSV quoting handles commas, quotes, and newlines. HTTP downloads serve `application/gzip`. Reports use inclusive `from` and exclusive `to` bounds, accepting dates or timestamps without time zones; defaults are `1970-01-01` and `2999-12-31`. Buckets include all order statuses. Top products group by product name, include only paid/shipped orders, and use original line prices without allocating coupons.
-
-## Verification
-
-```sh
-./scripts/test.sh
-```
-
-`./scripts/test.sh` runs Rust tests, starts the stack, runs the HTTP suite, and checks the CLI commands. `./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. The original smoke tests remain unchanged in `tests/test_smoke.py`. Additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
-
-The [API and command coverage](docs/submission.md) reference maps behavior to tests and describes known limits. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside this repository. Normal tests never depend on `legacy/`. Its result covers only the scenarios the comparison executes, not every input or concurrent execution.
+Bank payment holds the order lock during bounded bank calls and marks an order paid before settlement. The later webhook verifies HMAC-SHA256 over the exact received bytes. The [transaction contract](CONTRACT.md#transactions-and-money) describes retry behavior, lock ordering, and settlement compatibility.
 
 ## Intentional safety changes
 
-Admin endpoints require a valid admin token (missing/invalid token 401, non-admin 403); logout revokes its token. Profile updates accept only name/email, duplicate email changes return 409, and API responses exclude password hashes. Existing legacy MD5 password hashes remain readable. Role changes accept `user` or `admin`. Cancelled orders cannot be reopened through admin status changes; other legacy status strings remain accepted.
+Admin routes require authentication and an admin role. Logout revokes its token, profile updates accept only name and email, and responses exclude password hashes. Input validation rejects invalid money, nonpositive quantities, negative CSV stock, and invalid report identifiers. SQL values use bound parameters, and dynamic sort and grouping columns use allowlists.
 
-SQL values are bound and sort/group columns are allowlisted. Invalid sort/group values, product page numbers below one, malformed/nonfinite/negative monetary values, negative CSV stock, and malformed/nonpositive quantities return JSON errors. An omitted item quantity still defaults to one. Refunds reject cancelled orders and amounts beyond the remaining total; sequential partial refunds can reach the total. Cancelling paid/shipped orders credits the total minus prior refunds. Cancelling an order already in refunded status retains the legacy stock-only behavior. Stock, coupons, transfers, and payments use transactions and locks. Bank calls have timeouts and stable idempotency keys; callbacks verify HMAC over the original bytes and preserve settlement without a matching payment row.
+Transactions prevent partial order creation and CSV imports. Refunds cannot exceed the order total, and cancelled orders cannot be reopened or refunded. HTTP exports confine filenames to the export directory and publish complete gzip files atomically. See [authentication and input validation](CONTRACT.md#authentication-and-input-validation) and [transactions and money](CONTRACT.md#transactions-and-money) for the full rules and legacy exceptions.
 
-Reports always read current committed data. Export uses CSV/gzip libraries and confines client filenames to the export directory; complete gzip files are published atomically. Input validation and transaction rollback prevent partial CSV imports. The application does not use shell commands to generate exports.
+## Known limits
+
+- Any authenticated user can access another user's order detail, invoice, cancellation, and refund. Only order listing and payment enforce ownership.
+- A bank may accept a charge after the API times out. Switching a still-pending order to wallet payment before settlement can collect both payments. Stable bank retry keys do not prevent this case.
+- A partial refund changes status to `refunded`. Cancelling in that status restores stock without crediting the remainder. An admin change to `paid` or `shipped` first makes cancellation credit the remainder.
+- Password hashes remain MD5, and money uses Rust `f64` with PostgreSQL `DOUBLE PRECISION` to preserve existing credentials and schema.
+- Sessions, queued jobs, and the email outbox belong to one process and disappear on restart. Email jobs append to the outbox without contacting an email provider.
+
+A valid signed settlement can mark a pending order paid without a matching payment row, preserving compatibility. It does not insert a payment or change `paid_amount`. These limits also appear in the [compatibility contract](CONTRACT.md#known-limits) and [design decisions](docs/submission.md#design-decisions-and-limits).
