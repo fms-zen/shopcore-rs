@@ -73,6 +73,54 @@ def make_order(user, product_id, quantity=1, **extra):
     })
 
 
+@pytest.mark.parametrize("coupon", [{}, {"coupon": None}, {"coupon": ""}], ids=["omitted", "null", "empty"])
+def test_no_coupon_preserves_representation_without_discount(user, product, coupon):
+    item = product(stock=3, price=10)
+    created = make_order(user, item["id"], **coupon)
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    detail = api("GET", f"/api/orders/{order_id}", user)
+    assert detail.status_code == 200, detail.text
+    listed = api("GET", "/api/orders?limit=-1", user)
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()) == 1
+    for order in [created.json(), detail.json(), listed.json()[0]]:
+        assert order["coupon"] == coupon.get("coupon")
+        assert order["total"] == 10
+    assert stock(item["id"]) == 2
+
+
+def test_expired_coupon_does_not_change_order_stock_or_usage(user, product):
+    import psycopg2
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL is required to seed an isolated coupon")
+    code = "AT-" + uuid.uuid4().hex
+    with psycopg2.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO coupons (code,percent,expires,single_use,used_count) VALUES (%s,50,'2000-01-01',TRUE,0)",
+                (code,),
+            )
+    try:
+        item = product(stock=3)
+        before = api("GET", "/api/orders?limit=-1", user).json()
+        result = make_order(user, item["id"], coupon=code)
+        assert result.status_code == 400, result.text
+        assert result.json()["error"] == "coupon expired"
+        assert stock(item["id"]) == 3
+        assert api("GET", "/api/orders?limit=-1", user).json() == before
+        with psycopg2.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT used_count FROM coupons WHERE code=%s", (code,))
+                assert cursor.fetchone()[0] == 0
+    finally:
+        with psycopg2.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM coupons WHERE code=%s", (code,))
+
+
 def test_invalid_later_item_rolls_back_order_and_stock(user, product):
     item = product(stock=5)
     before = api("GET", "/api/orders?limit=-1", user).json()
