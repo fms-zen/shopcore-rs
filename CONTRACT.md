@@ -11,11 +11,11 @@ Project root is `shopcore-rs/`. The sibling `legacy/` is read-only reference mat
 - Orders owns order routes and order/pricing/inventory helpers.
 - Money owns wallet/payment/webhook routes and bank client.
 - Reports/maintenance owns reports, exporter, CLI commands and runbook.
-- Astra reviewer owns this contract and review notes. Shared-interface changes require coordination with foundation and reviewer. Executors do not edit another executor's files.
+- Astra reviewer owns this contract and review notes. Shared-interface changes require a message to foundation and reviewer before adoption. Executors do not edit another executor's files.
 
-## Shared interface
+## Freeze the shared interface before feature integration
 
-The migration uses these shared definitions.
+Foundation confirmed these shared definitions. Foundation publishes the final compiling definitions and any clarifications to all executors.
 
 ```rust
 #[derive(Clone)]
@@ -73,8 +73,8 @@ A correctly HMAC-SHA256 signed settled webhook with an arbitrary `bank_ref` move
 - Logout invalidates its token. Only name/email may be changed through profile update. Tokens need not reproduce legacy predictable MD5 values; existing password hashes must remain readable.
 - Bind SQL values. Whitelist documented sort/group_by values; never interpolate untrusted SQL identifiers. Use CSV and gzip libraries and constrain report filenames to the export directory.
 - Reject malformed/non-finite/negative monetary inputs and invalid item quantities rather than creating credits or stock through arithmetic abuse. Preserve documented valid requests and explicitly record any additional behavior change.
-- Topup, transfer, and refund amounts must be strictly positive. Cumulative refunds cannot exceed the order total. Sequential partial refunds remain supported within that cap. Cancelled orders cannot subsequently be refunded. Cancellation and refund must not create duplicate wallet credit.
-- Cancelled is terminal for admin status changes, preventing repeated stock restoration or wallet credit. When cancelling a paid/shipped order, wallet credit is the remaining total minus prior refunds. Keep the existing refunded response-field semantics. Do not redesign all admin transitions.
+- Approved money correction. Topup, transfer, and refund amounts must be strictly positive. Cumulative refunds cannot exceed the order total. Sequential partial refunds remain supported within that cap. Cancelled orders cannot subsequently be refunded. Cancellation and refund must not create duplicate wallet credit.
+- Approved admin correction. Cancelled is terminal for admin status changes, preventing repeated stock restoration or wallet credit. When cancelling a paid/shipped order, wallet credit is the remaining total minus prior refunds. Keep the existing refunded response-field semantics. Do not redesign all admin transitions.
 - Use one transaction for each stock/coupon/money mutation. Order state is locked before pay/cancel/refund; user locks for transfers are acquired in ascending ID order; product locks are acquired consistently. Atomic increments/decrements avoid stale balances. Failed order creation rolls back all inserted rows, stock changes and coupon use.
 - Single-use coupon consumption and order number allocation must be safe under concurrent requests without schema redesign.
 - Bank requests have finite timeouts. All retries for an order reuse a stable idempotency key; do not hold wallet-user locks during bank I/O. A bounded order lock during bank calls is acceptable for this timebox if callback handling cannot deadlock the HTTP response.

@@ -103,6 +103,8 @@ The two export formats serve separate existing contracts. CLI export is plain CS
 
 The approved safety changes are documented in [README.md](../README.md#intentional-safety-changes) and [CONTRACT.md](../CONTRACT.md#intentional-safety-fixes-and-transaction-rules). They include admin authentication, constrained profile updates, input validation, refund limits, terminal cancellation, and transaction protection.
 
+They do not authorize a broader policy redesign.
+
 The migration preserves these behaviors. Changing them requires a user decision.
 
 - Any authenticated user can access order detail, invoice, cancellation, and refund for another user's order. Order listing and payment remain owner-scoped.
