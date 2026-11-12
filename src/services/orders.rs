@@ -92,15 +92,12 @@ pub async fn create(state: &AppState, user: &AuthUser, data: &Value) -> ApiResul
             .ok_or_else(|| ApiError::bad_request("invalid quantity"))?;
         requested.push((pid, quantity));
     }
-    let coupon = data
-        .get("coupon")
-        .and_then(Value::as_str)
-        .filter(|c| !c.is_empty());
+    let coupon = data.get("coupon").and_then(Value::as_str);
     let notify_url = data.get("notify_url").and_then(Value::as_str);
     let mut tx = state.pool.begin().await?;
     let mut percent = 0;
     let mut coupon_id = None;
-    if let Some(code) = coupon {
+    if let Some(code) = coupon.filter(|c| !c.is_empty()) {
         let row = sqlx::query("SELECT * FROM coupons WHERE code=$1 ORDER BY id LIMIT 1 FOR UPDATE")
             .bind(code)
             .fetch_optional(&mut *tx)
