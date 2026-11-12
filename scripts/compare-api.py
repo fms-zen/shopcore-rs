@@ -98,7 +98,6 @@ def compare(legacy, rust):
                 return 'mismatch', 'legacy password hash missing'
     if equal(left, right):
         return ('safety_difference' if policy == 'password_hash' else 'match'), policy
-    # Scenario code supplies exact expected bodies for intentionally divergent cases.
     if policy and isinstance(legacy.body, dict) and '_expected' in legacy.body:
         expected_left, expected_right = legacy.body['_expected'], rust.body['_expected']
         if equal(left['body']['actual'], normalize(expected_left)) and equal(right['body']['actual'], normalize(expected_right)):
@@ -242,10 +241,8 @@ def scenario(client, suffix, secret, side):
     filtered = ok(call('download filtered empty CSV', 'GET /api/reports/download', '/api/reports/download?' + urllib.parse.urlencode(filtered_export), token=admin))
     if len(filtered['csv']) != 1:
         raise ValueError('export ignored exclusive empty date range')
-    # These divergent writes run last so they cannot contaminate paired scenarios.
     anonymous = call('anonymous admin denied', 'GET /api/admin/users', policy='admin authentication')
     expected_users = next(o.body for o in client.observations if o.label == 'admin user list')
-    # User balances are unchanged since the admin list, except freshness order stock reservation.
     client.known(anonymous, {'status': 200, 'body': expected_users}, {'status': 401, 'body': {'error': 'unauthorized'}})
     call('non-admin denied', 'GET /api/admin/users', token=bob)
     old_profile = ok(call('allowlist initial profile', 'GET /api/users/me', token=profile))
@@ -254,7 +251,6 @@ def scenario(client, suffix, secret, side):
     client.known(patch, {'status': 200, 'body': changed}, {'status': 200, 'body': old_profile})
     call('logout', 'POST /api/logout', token=alice)
     logged_out = call('logout token revoked', 'GET /api/users/me', token=alice, policy='logout revokes bearer token')
-    # Capture the expected legacy profile after all money operations, before logout.
     expected = dict(next(o.body for o in client.observations if o.label == 'profile email only'))
     expected['wallet_balance'] = 500.125 - 10.25
     client.known(logged_out, {'status': 200, 'body': expected}, {'status': 401, 'body': {'error': 'unauthorized'}})
@@ -271,11 +267,21 @@ def scenario(client, suffix, secret, side):
 def self_test():
     baseline = Observation('control', 'GET /api/orders', 200, {'total': 12.5, 'items': [{'id': 1, 'qty': 2}, {'id': 2, 'qty': 3}], 'error': 'original'})
     controls = {}
-    changed = copy.deepcopy(baseline); changed.status = 201; controls['status'] = changed
-    changed = copy.deepcopy(baseline); changed.body['error'] = 'changed'; controls['error text'] = changed
-    changed = copy.deepcopy(baseline); changed.body['total'] = 12.51; controls['money'] = changed
-    changed = copy.deepcopy(baseline); changed.body['items'][0]['qty'], changed.body['items'][1]['qty'] = 3, 2; controls['row assignment'] = changed
-    changed = copy.deepcopy(baseline); del changed.body['total']; controls['missing key'] = changed
+    changed = copy.deepcopy(baseline)
+    changed.status = 201
+    controls['status'] = changed
+    changed = copy.deepcopy(baseline)
+    changed.body['error'] = 'changed'
+    controls['error text'] = changed
+    changed = copy.deepcopy(baseline)
+    changed.body['total'] = 12.51
+    controls['money'] = changed
+    changed = copy.deepcopy(baseline)
+    changed.body['items'][0]['qty'], changed.body['items'][1]['qty'] = 3, 2
+    controls['row assignment'] = changed
+    changed = copy.deepcopy(baseline)
+    del changed.body['total']
+    controls['missing key'] = changed
     assert compare(baseline, copy.deepcopy(baseline))[0] == 'match'
     for name, changed in controls.items():
         assert compare(baseline, changed)[0] == 'mismatch', name

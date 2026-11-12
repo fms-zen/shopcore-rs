@@ -4,7 +4,7 @@ This checklist maps the migration requirements to source and repeatable checks. 
 
 ## HTTP operations
 
-Each operation below has coverage in the supplied, unchanged [test_smoke.py](../tests/test_smoke.py). Function names identify the permanent test that exercises the operation. These smoke tests establish the original acceptance baseline. The migration's own regression tests are listed separately below.
+Each operation below has coverage in the supplied, unchanged [test_smoke.py](../tests/test_smoke.py). These smoke tests establish the original acceptance baseline. The migration's own regression tests are listed separately below.
 
 | Method and path | Supplied test function |
 | --- | --- |
@@ -36,7 +36,7 @@ Each operation below has coverage in the supplied, unchanged [test_smoke.py](../
 | `POST /api/admin/orders/{id}/status` | `test_admin_users_roles_and_order_status` |
 | `POST /api/webhooks/bank` | `test_bank_webhook_with_valid_signature` |
 
-The migration adds the following evidence beyond the supplied smoke tests.
+The migration adds these checks beyond the supplied smoke tests. The coupon representation and expiry tests were added after the original acceptance recorded in [REVIEW.md](../REVIEW.md).
 
 | Behavior | Migration test file and function |
 | --- | --- |
@@ -65,7 +65,7 @@ The migration adds the following evidence beyond the supplied smoke tests.
 
 All command logic is in [src/cli.rs](../src/cli.rs), with initialization and seed logic in [src/db.rs](../src/db.rs). [manage.py](../manage.py) only forwards arguments to Rust. [scripts/test-cli.sh](../scripts/test-cli.sh) exercises the shim against the existing seeded Compose stack.
 
-| Command | Permanent CLI acceptance check |
+| Command | CLI acceptance check |
 | --- | --- |
 | `init-db` | Repeated success message, six expected tables, existing data unchanged |
 | `seed` | Repeated success message, existing data unchanged, original product values, coupons, and admin credentials |
@@ -91,7 +91,7 @@ Rust unit tests in `src/cli.rs` also cover `csv_import_handles_quotes_and_keeps_
 
 The comparison script supplements the supplied acceptance tests. Its result applies to the scenarios it executes, with documented safety differences reported separately. It does not establish equivalence for every input or concurrent execution.
 
-## Step 4 defense
+## Design decisions and limits
 
 Transactions keep each stock, coupon, or money change consistent with its order state. A failed order creation rolls back inserted rows, stock reservation, and coupon use together. Product locks follow product ID order. Wallet transfers lock users in ascending ID order. Payment, cancellation, refund, and settlement lock the order first. This ordering avoids competing operations observing stale state or taking the same locks in opposite orders. See [src/services/orders.rs](../src/services/orders.rs), [src/routes/orders.rs](../src/routes/orders.rs), and [src/routes/wallet.rs](../src/routes/wallet.rs).
 
@@ -101,9 +101,9 @@ Bank requests use an order-derived idempotency key so retries can recover the sa
 
 The two export formats serve separate existing contracts. CLI export is plain CSV with `order_no,status,total,created_at`, one row per order. HTTP export is gzip CSV with `order_no,date,status,user,product,qty,price`, one row per item. CSV libraries preserve quoted fields. The HTTP exporter confines filenames and publishes complete gzip files through atomic rename. See [src/cli.rs](../src/cli.rs) and [src/services/exporter.rs](../src/services/exporter.rs).
 
-The approved safety changes remain those documented in [README.md](../README.md#intentional-safety-changes) and [CONTRACT.md](../CONTRACT.md#intentional-safety-fixes-and-transaction-rules). They include admin authentication, constrained profile updates, input validation, refund limits, terminal cancellation, and transaction protection. They do not authorize a broader policy redesign.
+The approved safety changes are documented in [README.md](../README.md#intentional-safety-changes) and [CONTRACT.md](../CONTRACT.md#intentional-safety-fixes-and-transaction-rules). They include admin authentication, constrained profile updates, input validation, refund limits, terminal cancellation, and transaction protection.
 
-The remaining choices below preserve current behavior. Changing any of them requires a user decision.
+The migration preserves these behaviors. Changing them requires a user decision.
 
 - Any authenticated user can access order detail, invoice, cancellation, and refund for another user's order. Order listing and payment remain owner-scoped.
 - A slow bank can accept a charge after the API times out. If the order remains pending and the client switches to wallet payment before settlement, both payment methods can collect money. Stable bank retry keys do not prevent this cross-method case.
@@ -111,4 +111,4 @@ The remaining choices below preserve current behavior. Changing any of them requ
 - Existing password hashes use MD5, and money remains `f64` with PostgreSQL `DOUBLE PRECISION`. This preserves the schema and existing credentials.
 - Sessions, background jobs, and the email outbox are process-local and disappear on restart. Standalone `purge-sessions` does not revoke sessions in the running server. Email jobs append to memory rather than sending through a provider.
 
-These are declared limits of the submission. The checklist does not claim a complete authorization redesign, durable job delivery, exact decimal money, or reconciliation of uncertain bank outcomes.
+The submission does not provide a complete authorization redesign, durable job delivery, exact decimal money, or reconciliation of uncertain bank outcomes.

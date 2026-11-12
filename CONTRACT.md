@@ -1,19 +1,21 @@
 # ShopCore Rust migration contract
 
-Project root is `shopcore-rs/`. The sibling `legacy/` is read-only reference material. The completed project must contain unchanged copies of the bank simulator, seed CSV, OpenAPI document and supplied tests; running it must not require its sibling directory.
+This records the migration's compatibility requirements and original acceptance at revision `e81bd43`. Later changes, including the empty-coupon correction and coupon regression tests, are outside that recorded acceptance run.
 
-## Ownership and coordination
+Project root is `shopcore-rs/`. The sibling `legacy/` is read-only reference material. The project must contain unchanged copies of the bank simulator, seed CSV, OpenAPI document, and supplied tests. Running it must not require its sibling directory.
+
+## Migration ownership
 
 - Foundation/integration owns Cargo files, shared modules, module registries, startup, Docker/Compose and copied reference assets.
 - Accounts/catalog/admin owns its route implementations.
 - Orders owns order routes and order/pricing/inventory helpers.
 - Money owns wallet/payment/webhook routes and bank client.
 - Reports/maintenance owns reports, exporter, CLI commands and runbook.
-- Astra reviewer owns this contract and review notes. Shared-interface changes require a message to foundation and reviewer before adoption. Executors do not edit another executor's files.
+- Astra reviewer owns this contract and review notes. Shared-interface changes require coordination with foundation and reviewer. Executors do not edit another executor's files.
 
-## Shared interface (freeze before feature integration)
+## Shared interface
 
-Foundation confirmed the following base contract; it publishes the final compiling definitions and any clarification to all executors.
+The migration uses these shared definitions.
 
 ```rust
 #[derive(Clone)]
@@ -63,7 +65,7 @@ The API contains 27 HTTP operations. Preserve required response keys, documented
 
 Reports bucket all orders in [from,to); top products include only paid/shipped orders. HTTP CSV export has header `order_no,date,status,user,product,qty,price`, one row per item, is gzip encoded, and returns `<filename>.gz`. CLI export is plain CSV with header `order_no,status,total,created_at` and one row per order. Preserve both formats.
 
-**Mandatory settlement compatibility:** a correctly HMAC-SHA256 signed settled webhook with an arbitrary bank_ref moves an existing pending order to paid even when no matching payment row exists. It independently marks any matching payment settled. The supplied test explicitly exercises this. Do not require a payment match, insert a synthetic payment, or change paid_amount merely to satisfy the callback.
+A correctly HMAC-SHA256 signed settled webhook with an arbitrary `bank_ref` moves an existing pending order to paid even when no matching payment row exists. It independently marks any matching payment settled. The supplied test exercises this requirement. Do not require a payment match, insert a synthetic payment, or change `paid_amount` for the callback.
 
 ## Intentional safety fixes and transaction rules
 
@@ -71,8 +73,8 @@ Reports bucket all orders in [from,to); top products include only paid/shipped o
 - Logout invalidates its token. Only name/email may be changed through profile update. Tokens need not reproduce legacy predictable MD5 values; existing password hashes must remain readable.
 - Bind SQL values. Whitelist documented sort/group_by values; never interpolate untrusted SQL identifiers. Use CSV and gzip libraries and constrain report filenames to the export directory.
 - Reject malformed/non-finite/negative monetary inputs and invalid item quantities rather than creating credits or stock through arithmetic abuse. Preserve documented valid requests and explicitly record any additional behavior change.
-- Parent-approved correction: topup, transfer and refund amounts must be strictly positive. Cumulative refunds cannot exceed the order total; sequential partial refunds remain supported within that cap. Cancelled orders cannot subsequently be refunded. Cancellation/refund interaction must not create duplicate wallet credit.
-- Parent-approved admin correction: cancelled is terminal for admin status changes, preventing reset-and-cancel stock/credit replay. When cancelling a paid/shipped order, wallet credit is the remaining total minus prior refunds. Keep the existing refunded response-field semantics; do not redesign all admin transitions.
+- Topup, transfer, and refund amounts must be strictly positive. Cumulative refunds cannot exceed the order total. Sequential partial refunds remain supported within that cap. Cancelled orders cannot subsequently be refunded. Cancellation and refund must not create duplicate wallet credit.
+- Cancelled is terminal for admin status changes, preventing repeated stock restoration or wallet credit. When cancelling a paid/shipped order, wallet credit is the remaining total minus prior refunds. Keep the existing refunded response-field semantics. Do not redesign all admin transitions.
 - Use one transaction for each stock/coupon/money mutation. Order state is locked before pay/cancel/refund; user locks for transfers are acquired in ascending ID order; product locks are acquired consistently. Atomic increments/decrements avoid stale balances. Failed order creation rolls back all inserted rows, stock changes and coupon use.
 - Single-use coupon consumption and order number allocation must be safe under concurrent requests without schema redesign.
 - Bank requests have finite timeouts. All retries for an order reuse a stable idempotency key; do not hold wallet-user locks during bank I/O. A bounded order lock during bank calls is acceptable for this timebox if callback handling cannot deadlock the HTTP response.
@@ -81,8 +83,8 @@ Reports bucket all orders in [from,to); top products include only paid/shipped o
 
 ## Acceptance gates
 
-Foundation runs shared builds serially with a reusable Cargo cache. First gate: image pulls, compiling skeleton, PostgreSQL connection, health. Integration gate: every operation registered and every command dispatched. Final gate: compile/tests, unchanged smoke suite, targeted concurrency/rollback/idempotency checks, gzip-content check, CLI checks and a clean standalone startup. Each executor reports exact commands/results and remaining blockers; reviewer checks the diff and evidence before declaring completion.
+Foundation runs shared builds serially with a reusable Cargo cache. Initial acceptance covers image pulls, compilation, PostgreSQL connection, and health. Integration acceptance checks that every operation is registered and every command is dispatched. Final acceptance covers compilation, tests, the unchanged smoke suite, targeted concurrency, rollback, idempotency, gzip content, CLI commands, and a clean standalone startup. Each executor reports commands, results, and remaining blockers. The reviewer checks the diff and evidence before declaring completion.
 
 Review division: Astra reviewer owns code, transaction and security/compatibility review. Coordinator owns independent black-box/system acceptance and packaging checks. Do not duplicate Cargo builds or test runs already owned by foundation/coordinator.
 
-Final acceptance passed: coordinator built Git archive `e81bd43` with a brand-new Docker-container BuildKit builder, started fresh database/export volumes, and passed all 47 HTTP tests on an Internet-isolated Compose network. Tested on linux/arm64 through OrbStack. Final source review is approved; see REVIEW.md for evidence and preserved limitations.
+The coordinator accepted Git archive `e81bd43` after building it with a new Docker-container BuildKit builder and starting fresh database and export volumes. All 47 HTTP tests passed on an Internet-isolated Compose network, on linux/arm64 through OrbStack. Source review approved that revision. See [REVIEW.md](REVIEW.md) for the recorded evidence and preserved limitations.

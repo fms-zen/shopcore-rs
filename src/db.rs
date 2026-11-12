@@ -64,7 +64,7 @@ pub fn format_timestamp(value: NaiveDateTime) -> String {
     value.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
 }
 
-/// Serialize the existing schema's row types without leaking Rust/SQLx details.
+/// Convert database rows to JSON with legacy timestamp formatting.
 pub fn row_to_json(row: &PgRow) -> Value {
     let mut result = Map::new();
     for column in row.columns() {

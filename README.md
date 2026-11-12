@@ -1,6 +1,6 @@
 # ShopCore Rust
 
-Standalone Rust/Axum migration of the ShopCore storefront backend. PostgreSQL keeps the original six-table schema, `DOUBLE PRECISION` amounts, and timestamp columns. The bank simulator, seed data, OpenAPI contract, and original smoke tests are included locally; this directory does not depend on `../legacy`.
+ShopCore's storefront backend uses Rust, Axum, and PostgreSQL. It keeps the original six-table schema, `DOUBLE PRECISION` amounts, and timestamp columns. The bank simulator, seed data, OpenAPI contract, and original smoke tests are included. Running the project does not require `../legacy`.
 
 ## Run and build
 
@@ -18,7 +18,7 @@ cargo build --locked --release
 DATABASE_URL=postgresql://shop:shop@localhost:5432/shop cargo run --locked -- serve
 ```
 
-The runtime needs no network access for dependency installation or compilation. Normal bank payments contact `BANK_URL`; notification jobs contact the order's `notify_url`. Building images or fetching Cargo dependencies requires network access on the first build. After caching dependencies, `cargo build --locked --offline` works without contacting the registry.
+Built images contain the executables and dependencies needed at runtime. Bank payments contact `BANK_URL`, and notification jobs contact the order's `notify_url`. The first image build or Cargo dependency download requires network access. After caching dependencies, `cargo build --locked --offline` works without contacting the registry.
 
 ## Architecture and flows
 
@@ -99,7 +99,7 @@ sequenceDiagram
     end
 ```
 
-Payment marks the order paid without waiting for settlement; a callback arriving during payment waits for the order lock. If no bank attempt produces an accepted response, the API rolls back its database transaction and returns 502; the stable retry key does not promise exactly-once bank execution. For compatibility, a valid signed settlement with an unmatched `bank_ref` still marks an existing pending order paid, without inserting a payment or changing `paid_amount`.
+Payment marks the order paid without waiting for settlement. A callback arriving during payment waits for the order lock. If no bank attempt produces an accepted response, the API rolls back its database transaction and returns 502. The stable retry key does not guarantee exactly-once bank execution. For compatibility, a valid signed settlement with an unmatched `bank_ref` still marks an existing pending order paid, without inserting a payment or changing `paid_amount`.
 
 ## Configuration
 
@@ -142,9 +142,9 @@ CLI export writes plain CSV with `order_no,status,total,created_at`, one row per
 docker compose --profile test run --build --rm test
 ```
 
-`./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. `./scripts/test.sh` runs Rust tests, starts the stack, and runs the HTTP suite. The 15 original smoke tests remain unchanged in `tests/test_smoke.py`; additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
+`./scripts/cargo.sh` provides a reusable Docker Rust toolchain if Rust is not installed locally. `./scripts/test.sh` runs Rust tests, starts the stack, runs the HTTP suite, and runs CLI acceptance. The 15 original smoke tests remain unchanged in `tests/test_smoke.py`. Additional tests cover safety, concurrency, reports, and CSV/gzip behavior. With a local pytest environment, use `BASE_URL=http://localhost:8000 pytest -q tests` against a running stack.
 
-The [submission checklist](docs/submission.md) maps requirements to tests and explains the migration's tradeoffs. `./scripts/test.sh` also runs CLI acceptance. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside the submitted repository. Normal tests never depend on `legacy/`.
+The [submission checklist](docs/submission.md) maps requirements to tests and explains the migration's tradeoffs. To check only the CLI on an existing seeded Compose stack, run `./scripts/test-cli.sh` without concurrent writers. For an optional comparison, run `python3 scripts/compare-api.py --legacy http://localhost:8001 --rust http://localhost:8000` against isolated, equivalently seeded stacks. This comparison mutates both stacks and needs a legacy executable outside the submitted repository. Normal tests never depend on `legacy/`.
 
 ## Intentional safety changes
 

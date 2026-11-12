@@ -14,7 +14,7 @@ pub const DEFAULT_FROM: &str = "1970-01-01";
 pub const DEFAULT_TO: &str = "2999-12-31";
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(0);
 
-/// PostgreSQL's TIMESTAMP bounds: inclusive start and exclusive end.
+/// Parse a report date or timestamp without a time zone.
 pub fn date_bound(value: &str) -> ApiResult<NaiveDateTime> {
     if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
         return Ok(date.and_hms_opt(0, 0, 0).unwrap());
