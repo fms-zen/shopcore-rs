@@ -27,7 +27,7 @@ The CLI supports `init-db`, `seed`, `import-products PATH`, `export-sales PATH`,
 
 Admin routes return 401 for a missing or invalid bearer token and 403 for an authenticated non-admin. Logout invalidates its token. Profile updates accept only name and email, and duplicate email changes return 409. Tokens do not reproduce the legacy predictable MD5 values. Existing password hashes remain readable. Role changes accept `user` or `admin`.
 
-SQL values are bound. Sort and `group_by` columns use allowlists, so untrusted input never becomes a SQL identifier. Invalid sort or group values, product pagination below one, malformed or nonfinite monetary values, negative money or CSV stock, and malformed or nonpositive item quantities return JSON errors. Topup, transfer, and refund amounts are strictly positive.
+SQL values are bound. Sort and `group_by` columns use allowlists, so untrusted input never becomes a SQL identifier. Invalid sort or group values, product page numbers below one, malformed or nonfinite monetary values, negative money or CSV stock, and malformed or nonpositive item quantities return JSON errors. Topup, transfer, and refund amounts are strictly positive.
 
 CSV and gzip libraries handle exports. HTTP report filenames stay within the export directory, and atomic rename publishes complete gzip files. Exports do not use shell commands.
 
