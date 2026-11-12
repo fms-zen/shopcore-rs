@@ -1,0 +1,7 @@
+target
+.git
+.pytest_cache
+__pycache__
+.env
+exports
+test-results
