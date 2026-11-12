@@ -45,19 +45,19 @@ Use existing Postgres column types and all six tables: users, products, coupons,
 
 ## Required compatibility checklist
 
-- [ ] Health: GET /health.
-- [ ] Accounts: POST /api/register, /api/login, /api/logout; GET and PATCH /api/users/me.
-- [ ] Products: GET and POST /api/products; GET and PUT /api/products/{id}.
-- [ ] Orders: GET and POST /api/orders; GET /api/orders/{id}; GET invoice; POST cancel and refund.
-- [ ] Money: GET /api/wallet; POST topup and transfer; POST /api/orders/{id}/pay; POST /api/webhooks/bank.
-- [ ] Administration: GET /api/admin/users; POST user role and order status routes.
-- [ ] Reports: GET /api/reports/sales; POST /api/reports/export; GET /api/reports/download.
-- [ ] CLI: init-db, seed, import-products PATH, export-sales PATH, purge-sessions.
-- [ ] All 15 supplied smoke tests pass unchanged against Rust.
-- [ ] Seed admin credentials, sample products and SAVE10/ONCE50 coupons match legacy assets.
-- [ ] Notifications send pending/paid payloads to notify_url; background email jobs remain supported.
-- [ ] Root Compose builds/runs independently of legacy and documented commands succeed.
-- [ ] Supplied tests run with one documented command; all operational command logic is Rust, with only a forwarding compatibility shim if needed.
+- [x] Health: GET /health.
+- [x] Accounts: POST /api/register, /api/login, /api/logout; GET and PATCH /api/users/me.
+- [x] Products: GET and POST /api/products; GET and PUT /api/products/{id}.
+- [x] Orders: GET and POST /api/orders; GET /api/orders/{id}; GET invoice; POST cancel and refund.
+- [x] Money: GET /api/wallet; POST topup and transfer; POST /api/orders/{id}/pay; POST /api/webhooks/bank.
+- [x] Administration: GET /api/admin/users; POST user role and order status routes.
+- [x] Reports: GET /api/reports/sales; POST /api/reports/export; GET /api/reports/download.
+- [x] CLI: init-db, seed, import-products PATH, export-sales PATH, purge-sessions.
+- [x] All 15 supplied smoke tests pass unchanged against Rust.
+- [x] Seed admin credentials, sample products and SAVE10/ONCE50 coupons match legacy assets.
+- [x] Notifications send pending/paid payloads to notify_url; background email jobs remain supported.
+- [x] Root Compose builds/runs independently of legacy and documented commands succeed.
+- [x] Supplied tests run with one documented command; all operational command logic is Rust, with only a forwarding compatibility shim if needed.
 
 The API contains 27 HTTP operations. Preserve required response keys, documented status codes, default values, pagination, public product access, owner-scoped order listing and payment, coupon expiry/use behavior, stock reservation, wallet credits and report semantics. Extra fields are permitted by OpenAPI but password hashes need not be exposed. Error responses are JSON objects with an error string, including extractor/fallback failures where practical.
 
@@ -84,3 +84,5 @@ Reports bucket all orders in [from,to); top products include only paid/shipped o
 Foundation runs shared builds serially with a reusable Cargo cache. First gate: image pulls, compiling skeleton, PostgreSQL connection, health. Integration gate: every operation registered and every command dispatched. Final gate: compile/tests, unchanged smoke suite, targeted concurrency/rollback/idempotency checks, gzip-content check, CLI checks and a clean standalone startup. Each executor reports exact commands/results and remaining blockers; reviewer checks the diff and evidence before declaring completion.
 
 Review division: Astra reviewer owns code, transaction and security/compatibility review. Coordinator owns independent black-box/system acceptance and packaging checks. Do not duplicate Cargo builds or test runs already owned by foundation/coordinator.
+
+Final acceptance passed: coordinator built Git archive `e81bd43` with a brand-new Docker-container BuildKit builder, started fresh database/export volumes, and passed all 47 HTTP tests on an Internet-isolated Compose network. Tested on linux/arm64 through OrbStack. Final source review is approved; see REVIEW.md for evidence and preserved limitations.
